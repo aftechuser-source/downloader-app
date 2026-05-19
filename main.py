@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 import yt_dlp
+import requests
 import os
 
 app = Flask(__name__)
@@ -31,6 +32,28 @@ def extract():
             })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json()
+    video_url = data.get('url')
+    req_headers = data.get('headers', {})
+    
+    # Add browser-like headers
+    req_headers.setdefault('User-Agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    )
+    
+    r = requests.get(video_url, headers=req_headers, stream=True)
+    return Response(
+        stream_with_context(r.iter_content(chunk_size=1024 * 1024)),
+        content_type='video/mp4',
+        headers={
+            'Content-Disposition': 'attachment; filename="video.mp4"',
+            'Content-Length': r.headers.get('Content-Length', '')
+        }
+    )
 
 @app.route('/health', methods=['GET'])
 def health():

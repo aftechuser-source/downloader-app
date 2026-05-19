@@ -15,27 +15,19 @@ def extract():
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'quiet': True,
-        'no_warnings': True,
+        'socket_timeout': 30,
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            # Get headers required for download
+            http_headers = info.get('http_headers', {})
             return jsonify({
                 'title': info.get('title'),
                 'thumbnail': info.get('thumbnail'),
-                'duration': info.get('duration'),
                 'download_url': info.get('url'),
-                'formats': [
-                    {
-                        'quality': f.get('format_note', 'unknown'),
-                        'ext': f.get('ext'),
-                        'url': f.get('url'),
-                        'filesize': f.get('filesize')
-                    }
-                    for f in info.get('formats', [])
-                    if f.get('url') and f.get('ext') == 'mp4'
-                ]
+                'headers': dict(http_headers),  # ← Send headers to Android
             })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -46,4 +38,3 @@ def health():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-

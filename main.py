@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 import yt_dlp
+import requests
 import os
 
 app = Flask(__name__)
@@ -15,30 +16,44 @@ def extract():
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'quiet': True,
-        'no_warnings': True,
+        'socket_timeout': 30,
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            # Get headers required for download
+            http_headers = info.get('http_headers', {})
             return jsonify({
                 'title': info.get('title'),
                 'thumbnail': info.get('thumbnail'),
-                'duration': info.get('duration'),
                 'download_url': info.get('url'),
-                'formats': [
-                    {
-                        'quality': f.get('format_note', 'unknown'),
-                        'ext': f.get('ext'),
-                        'url': f.get('url'),
-                        'filesize': f.get('filesize')
-                    }
-                    for f in info.get('formats', [])
-                    if f.get('url') and f.get('ext') == 'mp4'
-                ]
+                'headers': dict(http_headers),  # ← Send headers to Android
             })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/download', methods=['POST'])
+def download():
+    data = request.get_json()
+    video_url = data.get('url')
+    req_headers = data.get('headers', {})
+    
+    # Add browser-like headers
+    req_headers.setdefault('User-Agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    )
+    
+    r = requests.get(video_url, headers=req_headers, stream=True)
+    return Response(
+        stream_with_context(r.iter_content(chunk_size=1024 * 1024)),
+        content_type='video/mp4',
+        headers={
+            'Content-Disposition': 'attachment; filename="video.mp4"',
+            'Content-Length': r.headers.get('Content-Length', '')
+        }
+    )
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -46,4 +61,3 @@ def health():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-

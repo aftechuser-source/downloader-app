@@ -51,6 +51,63 @@ def extract():
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Extract all available qualities (new, additive endpoint) ─────
+@app.route("/extract/formats", methods=["POST"])
+def extract_formats():
+    data = request.get_json(silent=True) or {}
+    url = data.get("url")
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+
+    try:
+        # No "format" selection: we want the full list, not one pick.
+        opts = {k: v for k, v in YDL_OPTS.items() if k != "format"}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        formats = []
+        for f in info.get("formats") or []:
+            if not f.get("url") or f.get("vcodec") in (None, "none"):
+                continue
+            if f.get("protocol") in ("mhtml",):
+                continue
+            height = f.get("height")
+            formats.append({
+                "format_id": f.get("format_id"),
+                "quality": f"{height}p" if height else (f.get("format_note") or "unknown"),
+                "height": height,
+                "width": f.get("width"),
+                "fps": f.get("fps"),
+                "ext": f.get("ext"),
+                "protocol": f.get("protocol"),
+                "filesize": f.get("filesize") or f.get("filesize_approx"),
+                "has_audio": f.get("acodec") not in (None, "none"),
+                "url": f["url"],
+                "headers": dict(f.get("http_headers") or info.get("http_headers") or {}),
+            })
+
+        # One entry per (height, has_audio, ext); prefer larger bitrate.
+        formats.sort(key=lambda x: (x["height"] or 0, x["has_audio"], x["filesize"] or 0), reverse=True)
+        seen, unique = set(), []
+        for f in formats:
+            key = (f["height"], f["has_audio"], f["ext"])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(f)
+
+        return jsonify({
+            "title": info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "webpage_url": info.get("webpage_url") or url,
+            "duration": info.get("duration"),
+            "formats": unique,
+        })
+    except Exception as e:
+        logger.exception("extract formats failed")
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── Download: yt-dlp for TikTok/IG, proxy for others ─────────────
 @app.route("/download", methods=["POST"])
 def download():

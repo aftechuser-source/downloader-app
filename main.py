@@ -5,6 +5,7 @@ import uuid
 import logging
 import traceback
 import requests
+from urllib.parse import urlencode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,6 +66,8 @@ def extract_formats():
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        base = f"{proto}://{request.host}"
         formats = []
         for f in info.get("formats") or []:
             if not f.get("url") or f.get("vcodec") in (None, "none"):
@@ -84,6 +87,8 @@ def extract_formats():
                 "has_audio": f.get("acodec") not in (None, "none"),
                 "url": f["url"],
                 "headers": dict(f.get("http_headers") or info.get("http_headers") or {}),
+                "download_link": base + "/download/file?" + urlencode(
+                    {"page_url": info.get("webpage_url") or url, "format_id": f.get("format_id")}),
             })
 
         # One entry per (height, has_audio, ext); prefer larger bitrate.
@@ -124,7 +129,7 @@ def download():
 
     # TikTok / Instagram: CDN blocks proxy — yt-dlp needs the original page link
     if page_url:
-        return _download_via_ytdlp(page_url)
+        return _download_via_ytdlp(page_url, data.get("format_id"))
 
     if _is_tiktok_or_reel(video_url or ""):
         return jsonify({"error": "page_url required for TikTok/Instagram downloads"}), 400
@@ -160,10 +165,14 @@ def _download_via_proxy(video_url: str, req_headers: dict):
         return jsonify({"error": str(e)}), 500
 
 
-def _download_via_ytdlp(url: str):
+def _download_via_ytdlp(url: str, format_id: str = None):
     video_id = str(uuid.uuid4())
     outtmpl = os.path.join(DOWNLOAD_DIR, f"{video_id}.%(ext)s")
     opts = {**YDL_OPTS, "outtmpl": outtmpl}
+    if format_id:
+        # chosen format with audio, else merge it with best audio
+        opts["format"] = f"{format_id}[acodec!=none]/{format_id}+bestaudio/{format_id}"
+        opts["merge_output_format"] = "mp4"
     filename = None
 
     try:
@@ -200,6 +209,16 @@ def _download_via_ytdlp(url: str):
     except Exception as e:
         logger.exception("yt-dlp download failed")
         return jsonify({"error": str(e), "detail": traceback.format_exc()[-400:]}), 500
+
+
+# ─── Direct download link for one chosen quality (GET, new) ───────
+@app.route("/download/file", methods=["GET"])
+def download_file():
+    page_url = request.args.get("page_url")
+    format_id = request.args.get("format_id")
+    if not page_url or not format_id:
+        return jsonify({"error": "page_url and format_id required"}), 400
+    return _download_via_ytdlp(page_url, format_id)
 
 
 @app.route("/health", methods=["GET"])
